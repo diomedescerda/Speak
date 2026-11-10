@@ -59,11 +59,13 @@ speak ja        # or simply: speak-ja
 | `speak ja history` | List saved Japanese Markdown reviews (`~/.local/share/speak/reviews/ja/`). |
 | `speak ja prep` | Pre-generate today's Japanese mission in the background. |
 | `speak ja review-text "..."` | Directly review typed or dictated Japanese text against today's mission. |
+| `speak sync` / `speak ja sync` | Manually pull/commit/push personal progress (`data/diomedes/`) to GitHub. |
 
 ## Where Data Is Stored
-- **Database:** `~/.local/share/speak/speak.db`
-- **English Markdown Reviews:** `~/.local/share/speak/reviews/YYYY-MM-DD.md`
-- **Japanese Markdown Reviews:** `~/.local/share/speak/reviews/ja/YYYY-MM-DD_ja_missionN.md`
-- **Audio Recordings:** `~/.local/share/speak/recordings/`
-- **Cached Native TTS Audio:** `~/.local/share/speak/tts_cache/`
+- **Default (Any User):**
+  - **Database:** `~/.local/share/speak/speak.db`
+  - **Markdown Reviews:** `~/.local/share/speak/reviews/` (English) and `~/.local/share/speak/reviews/ja/` (Japanese)
+- **Owner Repo Persistence (`Diomedes`):**
+  - When Git user `diomedescerda` is detected (or `SPEAK_USER=diomedes`), `speak.db` and `reviews/` are persisted inside `<repo>/data/diomedes/` and automatically committed & pushed after completed sessions. Other users automatically use `~/.local/share/speak/` and ignore `data/diomedes/`.
+- **Audio Recordings & TTS Cache (Always Local):** `~/.local/share/speak/recordings/` & `~/.local/share/speak/tts_cache/`
 - **Daily Timer:** `~/.config/systemd/user/speak-prep.timer` (`systemctl --user status speak-prep.timer`)

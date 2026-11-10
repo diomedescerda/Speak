@@ -6,3 +6,5 @@ venv/
 .env
 *.wav
 *.db
+!data/diomedes/speak.db
+

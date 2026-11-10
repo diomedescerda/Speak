@@ -40,6 +40,17 @@ app.add_typer(ja_app, name="ja")
 console = Console()
 
 
+def _auto_sync_if_diomedes(reason: str = "session", pull_first: bool = False) -> None:
+    if not db.IS_DIOMEDES:
+        return
+    with console.status("[bold cyan]☁️ Syncing Diomedes progress to GitHub (data/diomedes/)...[/bold cyan]"):
+        res = db.sync_diomedes_data(reason=reason, pull_first=pull_first)
+    if res.get("synced"):
+        console.print(f"[dim]☁️ {res.get('message')}[/dim]")
+    else:
+        console.print(f"[dim yellow]☁️ {res.get('message')}[/dim yellow]")
+
+
 def _prepare_mission(force_new: bool = False, category: Optional[str] = None, quiet: bool = False) -> Dict[str, Any]:
     db.init_db()
     if not force_new and not category:
@@ -368,6 +379,7 @@ def run_interactive_session(force_new: bool = False, category: Optional[str] = N
             console.print("\n[bold green]✅ Awesome session! Round 1 + Round 2 completed and logged.[/bold green]")
         else:
             console.print("\n[bold green]✅ Daily speaking session saved! Keep the streak alive tomorrow.[/bold green]")
+        _auto_sync_if_diomedes(reason="en-session")
         return
 
 
@@ -419,6 +431,16 @@ def cmd_review_text(
     mission = _prepare_mission(force_new=False)
     render_mission_card(mission)
     _execute_round(mission, round_num=round_num, provided_text=text)
+    _auto_sync_if_diomedes(reason="en-review")
+
+
+@app.command("sync")
+def cmd_sync() -> None:
+    """Sync Diomedes personal progress (data/diomedes/) with the Git repository."""
+    if not db.IS_DIOMEDES:
+        console.print("[yellow]Repo persistence is only enabled for user Diomedes (using local ~/.local/share/speak/).[/yellow]")
+        return
+    _auto_sync_if_diomedes(reason="manual-sync", pull_first=True)
 
 
 @app.command("stats")
@@ -426,13 +448,15 @@ def cmd_stats() -> None:
     """Show your speaking streak, WPM, vocabulary variety, mastered phrases, and top crutch words."""
     s = db.get_stats_summary()
     console.print()
+    storage_label = "Repo (data/diomedes/)" if db.IS_DIOMEDES else "Local (~/.local/share/speak/)"
     summary = (
         f"🔥 [bold yellow]Current Streak:[/bold yellow] {s['streak']} day(s)   •   "
         f"📅 [bold cyan]Practice Days:[/bold cyan] {s['practice_days']}   •   "
         f"🎙️ [bold green]Total Takes:[/bold green] {s['total_attempts']} ({s['total_minutes']} mins)\n"
         f"⚡ [bold white]Avg Pace:[/bold white] {s['avg_wpm']} WPM   •   "
         f"🌈 [bold magenta]Avg Vocab Variety:[/bold magenta] {s['avg_unique_ratio']}%   •   "
-        f"🎯 [bold green]Target Phrases Mastered:[/bold green] {s['phrases_mastered']}/{s['phrases_assigned']}"
+        f"🎯 [bold green]Target Phrases Mastered:[/bold green] {s['phrases_mastered']}/{s['phrases_assigned']}   •   "
+        f"💾 [dim]{storage_label}[/dim]"
     )
     console.print(Panel(summary, title="[bold cyan]📊 Your Speaking Progress[/bold cyan]", box=ROUNDED))
 
@@ -951,6 +975,7 @@ def run_ja_interactive_session(force_new: bool = False, stage_override: Optional
                 console.print("\n[bold green]✅ お疲れ様でした！ (Awesome work! Round 1 + Round 2 completed and logged.)[/bold green]")
             else:
                 console.print("\n[bold green]✅ お疲れ様でした！ Daily Japanese speaking session saved.[/bold green]")
+            _auto_sync_if_diomedes(reason="ja-session")
             return
 
 
@@ -1019,6 +1044,13 @@ def ja_cmd_review_text(
     mission = _prepare_ja_mission(force_new=False)
     render_ja_mission_card(mission)
     _execute_ja_round(mission, round_num=round_num, provided_text=text)
+    _auto_sync_if_diomedes(reason="ja-review")
+
+
+@ja_app.command("sync")
+def ja_cmd_sync() -> None:
+    """Sync Diomedes personal progress (data/diomedes/) with the Git repository."""
+    cmd_sync()
 
 
 @ja_app.command("stats")
@@ -1033,6 +1065,7 @@ def ja_cmd_stats() -> None:
         else "Max Curriculum Stage Reached (Stage 5 N4+)"
     )
 
+    storage_label = "Repo (data/diomedes/)" if db.IS_DIOMEDES else "Local (~/.local/share/speak/)"
     console.print()
     summary = (
         f"🗾 [bold yellow]Current Level:[/bold yellow] {stage_info['name']}   [dim]({prog_note})[/dim]\n"
@@ -1041,7 +1074,8 @@ def ja_cmd_stats() -> None:
         f"🎙️ [bold green]Total Takes:[/bold green] {s['total_attempts']} ({s['total_minutes']} mins)\n"
         f"⚡ [bold white]Avg Speaking Pace:[/bold white] {s['avg_cpm']} CPM (chars/min)   •   "
         f"🧱 [bold magenta]Grammar Frames Used:[/bold magenta] {s['grammar_mastered']}/{s['grammar_assigned']}   •   "
-        f"🎯 [bold green]Vocab Blocks Used:[/bold green] {s['vocab_mastered']}/{s['vocab_assigned']}"
+        f"🎯 [bold green]Vocab Blocks Used:[/bold green] {s['vocab_mastered']}/{s['vocab_assigned']}   •   "
+        f"💾 [dim]{storage_label}[/dim]"
     )
     console.print(Panel(summary, title="[bold cyan]🇯🇵 Your Japanese Speaking Progress[/bold cyan]", box=ROUNDED))
 

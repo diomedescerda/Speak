@@ -1,14 +1,47 @@
 import json
+import os
+import shutil
 import sqlite3
+import subprocess
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DATA_DIR = Path.home() / ".local" / "share" / "speak"
-RECORDINGS_DIR = DATA_DIR / "recordings"
+REPO_ROOT = Path(__file__).resolve().parent
+LOCAL_DATA_DIR = Path.home() / ".local" / "share" / "speak"
+DIOMEDES_DATA_DIR = REPO_ROOT / "data" / "diomedes"
+
+
+def is_diomedes_user() -> bool:
+    """Detect whether the current user is Diomedes (owner of the repo)."""
+    env_user = os.environ.get("SPEAK_USER", "").strip().lower()
+    if env_user in ("diomedes", "diomedescerda", "1", "true"):
+        return True
+    if env_user in ("local", "default", "other", "0", "false"):
+        return False
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "config", "user.name"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if proc.returncode == 0:
+            git_name = proc.stdout.strip().lower()
+            if git_name in ("diomedescerda", "diomedes"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+IS_DIOMEDES = is_diomedes_user()
+DATA_DIR = DIOMEDES_DATA_DIR if IS_DIOMEDES else LOCAL_DATA_DIR
+RECORDINGS_DIR = LOCAL_DATA_DIR / "recordings"
 REVIEWS_DIR = DATA_DIR / "reviews"
 JA_REVIEWS_DIR = REVIEWS_DIR / "ja"
-TTS_CACHE_DIR = DATA_DIR / "tts_cache"
+TTS_CACHE_DIR = LOCAL_DATA_DIR / "tts_cache"
 DB_PATH = DATA_DIR / "speak.db"
 
 SPEAKING_MODES = [
@@ -41,6 +74,98 @@ def ensure_dirs() -> None:
     REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     JA_REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if IS_DIOMEDES:
+        legacy_db = LOCAL_DATA_DIR / "speak.db"
+        if not DB_PATH.exists() and legacy_db.exists():
+            shutil.copy2(legacy_db, DB_PATH)
+
+        legacy_reviews = LOCAL_DATA_DIR / "reviews"
+        if legacy_reviews.exists():
+            for md_file in legacy_reviews.glob("*.md"):
+                dest = REVIEWS_DIR / md_file.name
+                if not dest.exists():
+                    shutil.copy2(md_file, dest)
+            legacy_ja_reviews = legacy_reviews / "ja"
+            if legacy_ja_reviews.exists():
+                for md_file in legacy_ja_reviews.glob("*.md"):
+                    dest = JA_REVIEWS_DIR / md_file.name
+                    if not dest.exists():
+                        shutil.copy2(md_file, dest)
+
+
+def sync_diomedes_data(reason: str = "session", pull_first: bool = False) -> Dict[str, Any]:
+    """Commit and push data/diomedes/ to the Git repository if running as Diomedes."""
+    if not IS_DIOMEDES:
+        return {"synced": False, "changed": False, "message": "Local storage mode (non-Diomedes profile)."}
+
+    ensure_dirs()
+    rel_data_path = "data/diomedes"
+
+    try:
+        if pull_first:
+            subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "pull", "--rebase", "--autostash"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+        subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "add", rel_data_path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+
+        diff_proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "diff", "--cached", "--quiet", "--", rel_data_path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        has_changes = diff_proc.returncode != 0
+
+        if has_changes:
+            commit_msg = f"chore(data): sync diomedes progress ({reason}) [{date.today().isoformat()}]"
+            commit_proc = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "commit", "-m", commit_msg, "--", rel_data_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if commit_proc.returncode != 0:
+                return {
+                    "synced": False,
+                    "changed": True,
+                    "message": f"Commit failed: {commit_proc.stderr.strip() or commit_proc.stdout.strip()}",
+                }
+
+        push_proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "push"],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        if push_proc.returncode != 0:
+            return {
+                "synced": False,
+                "changed": has_changes,
+                "message": f"Committed locally to {rel_data_path}/, push deferred ({push_proc.stderr.strip() or 'offline'}).",
+            }
+
+        return {
+            "synced": True,
+            "changed": has_changes,
+            "message": (
+                f"Synced & pushed {rel_data_path}/ to GitHub."
+                if has_changes
+                else f"{rel_data_path}/ is already up to date with GitHub."
+            ),
+        }
+    except Exception as e:
+        return {"synced": False, "changed": False, "message": f"Git sync skipped: {e}"}
 
 
 def get_conn() -> sqlite3.Connection:
