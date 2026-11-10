@@ -1,4 +1,6 @@
+import asyncio
 import collections
+import hashlib
 import os
 import re
 import select
@@ -12,6 +14,8 @@ import wave
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from rich.console import Console
+from db import TTS_CACHE_DIR, ensure_dirs
+from ja_curriculum import strip_furigana
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "if", "in", "on", "at", "to", "for",
@@ -33,7 +37,7 @@ FILLER_CRUTCH_WORDS = {
     "maybe", "kind", "sort", "know", "mean", "honestly", "obviously",
 }
 
-_ASR_PIPE = None
+_ASR_PIPES: Dict[str, Any] = {}
 
 
 def _get_wav_duration(wav_path: Path) -> float:
@@ -147,14 +151,18 @@ def record_audio(output_path: Path, console: Console, target_seconds: int = 90) 
     return duration
 
 
-def _load_asr_pipeline():
-    global _ASR_PIPE
-    if _ASR_PIPE is not None:
-        return _ASR_PIPE
+def _load_asr_pipeline(lang: str = "en"):
+    global _ASR_PIPES
+    if lang in _ASR_PIPES:
+        return _ASR_PIPES[lang]
 
-    cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / "models--openai--whisper-base.en"
+    model_id = "openai/whisper-base" if lang == "ja" else "openai/whisper-base.en"
+    cache_slug = "models--openai--whisper-base" if lang == "ja" else "models--openai--whisper-base.en"
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / cache_slug
     if cache_dir.exists():
         os.environ["HF_HUB_OFFLINE"] = "1"
+    else:
+        os.environ.pop("HF_HUB_OFFLINE", None)
     os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
     import warnings
@@ -163,15 +171,15 @@ def _load_asr_pipeline():
     from transformers.utils import logging as hf_logging
     hf_logging.set_verbosity_error()
 
-    _ASR_PIPE = pipeline(
+    _ASR_PIPES[lang] = pipeline(
         "automatic-speech-recognition",
-        model="openai/whisper-base.en",
+        model=model_id,
         device="cpu",
     )
-    return _ASR_PIPE
+    return _ASR_PIPES[lang]
 
 
-def transcribe_audio(audio_path: Path) -> str:
+def transcribe_audio(audio_path: Path, lang: str = "en") -> str:
     if not audio_path.exists():
         return ""
 
@@ -196,10 +204,19 @@ def transcribe_audio(audio_path: Path) -> str:
             timeout=20,
         )
         target_wav = cleaned_wav if cleaned_wav.exists() and _get_wav_duration(cleaned_wav) > 0.4 else audio_path
-        pipe = _load_asr_pipeline()
-        res = pipe(str(target_wav), return_timestamps=True)
-        text = (res.get("text") or "").strip()
-        return re.sub(r"\s+", " ", text)
+        pipe = _load_asr_pipeline(lang=lang)
+        if lang == "ja":
+            res = pipe(
+                str(target_wav),
+                return_timestamps=True,
+                generate_kwargs={"language": "japanese", "task": "transcribe"},
+            )
+            text = (res.get("text") or "").strip()
+            return text
+        else:
+            res = pipe(str(target_wav), return_timestamps=True)
+            text = (res.get("text") or "").strip()
+            return re.sub(r"\s+", " ", text)
     finally:
         if cleaned_wav.exists():
             cleaned_wav.unlink()
@@ -286,4 +303,128 @@ def analyze_transcript(
         "targets_used": targets_used,
         "forbidden_used": forbidden_used,
         "repeated_words": repeated_words[:6],
+    }
+
+
+async def _synthesize_edge_tts(text: str, out_mp3: Path, voice: str = "ja-JP-NanamiNeural", rate: str = "-10%") -> None:
+    import edge_tts
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    await communicate.save(str(out_mp3))
+
+
+def synthesize_and_play_ja_tts(
+    text: str,
+    console: Console,
+    label: str = "Native Japanese Audio",
+    voice: str = "ja-JP-NanamiNeural",
+    rate: str = "-10%",
+) -> None:
+    """Synthesize clean Japanese text (stripping inline furigana) and play it aloud."""
+    clean_text = strip_furigana(text).strip()
+    if not clean_text:
+        console.print("[yellow]No Japanese text available to play.[/yellow]")
+        return
+
+    ensure_dirs()
+    digest = hashlib.sha256(f"{voice}|{rate}|{clean_text}".encode("utf-8")).hexdigest()[:16]
+    cached_mp3 = TTS_CACHE_DIR / f"ja_{digest}.mp3"
+
+    if not cached_mp3.exists() or cached_mp3.stat().st_size < 100:
+        try:
+            with console.status(f"[bold cyan]🔊 Synthesizing {label} ({voice}, {rate})...[/bold cyan]", spinner="dots"):
+                asyncio.run(_synthesize_edge_tts(clean_text, cached_mp3, voice=voice, rate=rate))
+        except Exception as e:
+            console.print(f"[bold red]TTS synthesis error:[/bold red] {e}")
+            return
+
+    play_cmd: Optional[List[str]] = None
+    if shutil.which("ffplay"):
+        play_cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(cached_mp3)]
+    elif shutil.which("mpv"):
+        play_cmd = ["mpv", "--no-video", "--really-quiet", str(cached_mp3)]
+    elif shutil.which("pw-play"):
+        play_cmd = ["pw-play", str(cached_mp3)]
+
+    if not play_cmd:
+        console.print("[bold red]No audio player (ffplay, mpv, pw-play) found.[/bold red]")
+        return
+
+    console.print(f"[bold magenta]🔊 Playing {label}...[/bold magenta] [dim](Press Ctrl+C to stop early)[/dim]")
+    try:
+        subprocess.run(play_cmd, check=False)
+    except KeyboardInterrupt:
+        console.print("[dim]Playback stopped.[/dim]")
+
+
+def _ja_item_matches(item_surface: str, item_reading: str, transcript: str) -> bool:
+    clean_t = re.sub(r"[\s。、！？「」『』（）()・,.!?]", "", transcript)
+    if not clean_t:
+        return False
+
+    candidates = []
+    surf = strip_furigana(item_surface).strip()
+    surf = re.sub(r"[〜~…・\s]", "", surf)
+    if surf:
+        candidates.append(surf)
+        # For longer multi-part expressions (e.g. よろしくお願いします -> 宜しくお願いします), match 4+ char suffix/prefix
+        if len(surf) >= 6:
+            candidates.append(surf[-5:])
+            candidates.append(surf[:4])
+        # Also add verb/adj stem if it ends in ます / い / る / う / く / す / つ / ぬ / ぶ / む
+        for suf in ("ます", "ました", "ません", "です", "だ"):
+            if len(surf) > len(suf) and surf.endswith(suf):
+                candidates.append(surf[: -len(suf)])
+        if len(surf) >= 2 and surf[-1] in "いるうくぐすつぬぶむ":
+            candidates.append(surf[:-1])
+
+    read = re.sub(r"[〜~…・\s]", "", (item_reading or "").strip())
+    if read:
+        candidates.append(read)
+        for suf in ("ます", "ました", "ません", "です"):
+            if len(read) > len(suf) and read.endswith(suf):
+                candidates.append(read[: -len(suf)])
+        if len(read) >= 3 and read[-1] in "いるうくぐすつぬぶむ":
+            candidates.append(read[:-1])
+
+    return any(c and c in clean_t for c in candidates)
+
+
+def analyze_ja_transcript(
+    transcript: str,
+    duration_sec: float,
+    mission: Dict[str, Any],
+) -> Dict[str, Any]:
+    clean_chars = re.sub(r"[\s。、！？「」『』（）()・,.!?a-zA-Z0-9]", "", transcript)
+    char_count = len(clean_chars)
+    effective_dur = max(duration_sec, max(8.0, char_count / 3.0)) if duration_sec <= 1.0 else duration_sec
+    cpm = round((char_count / effective_dur) * 60.0, 1) if effective_dur > 0 else 0.0
+
+    vocab_used: List[str] = []
+    for vb in mission.get("vocab_blocks", []):
+        w = vb.get("word", "").strip()
+        r = vb.get("reading", "").strip()
+        if w and _ja_item_matches(w, r, transcript):
+            vocab_used.append(w)
+
+    gf = mission.get("grammar_frame", {})
+    pattern = gf.get("pattern", "").strip()
+    grammar_used = False
+    if pattern:
+        # Split pattern on 〜 / ~ / / and check if the core Japanese chunks appear in transcript
+        chunks = [
+            re.sub(r"[\s。、！？()（）]", "", strip_furigana(c))
+            for c in re.split(r"[〜~/／・]", pattern)
+        ]
+        chunks = [c for c in chunks if len(c) >= 1 and not re.match(r"^[A-Za-z0-9]+$", c)]
+        clean_t = re.sub(r"[\s。、！？「」『』（）()・,.!?]", "", transcript)
+        if chunks and any(c in clean_t for c in chunks):
+            grammar_used = True
+
+    return {
+        "duration_sec": round(effective_dur, 1),
+        "char_count": char_count,
+        "cpm": cpm,
+        "vocab_used": vocab_used,
+        "grammar_used": grammar_used,
+        "grammar_pattern": pattern,
     }

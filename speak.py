@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import datetime
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import typer
 from rich.box import ROUNDED
@@ -23,12 +24,19 @@ import ai
 import audio
 import db
 import fetcher
+import ja_curriculum
 
 app = typer.Typer(
-    help="Automated Daily English Speaking System — Real Web Input + Anti-Repetition Constraints + AI Review.",
+    help="Automated Daily Speaking System (English & Japanese) — Daily Input + Scaffolding + AI Review.",
     invoke_without_command=True,
     no_args_is_help=False,
 )
+ja_app = typer.Typer(
+    help="🇯🇵 Japanese Speaking Coach — Progressive N5→N4 Curriculum, Furigana Scaffolding, Native TTS Shadowing & AI Review.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+app.add_typer(ja_app, name="ja")
 console = Console()
 
 
@@ -469,6 +477,615 @@ def cmd_history() -> None:
     console.print(f"[bold cyan]🎙️ Audio Recordings Directory:[/bold cyan] {db.RECORDINGS_DIR}\n")
     if not reviews:
         console.print("[dim]No saved reviews yet. Run `speak` to complete your first session![/dim]")
+        return
+    for p in reviews[:15]:
+        console.print(f"  • [bold white]{p.name}[/bold white]  →  [dim]{p}[/dim]")
+
+
+# =====================================================================
+# 🇯🇵 JAPANESE SPEAKING MODULE (`speak ja` / `speak-ja`)
+# =====================================================================
+
+
+def _fmt_furigana(text: str) -> str:
+    """Convert inline furigana `漢字[かんじ]` into Rich-safe `漢字[dim](かんじ)[/dim]`."""
+    if not text:
+        return ""
+    return re.sub(r"\[(?![lrtqn]\])([^\]]+)\]", r"[dim](\1)[/dim]", text)
+
+
+def _prepare_ja_mission(
+    force_new: bool = False,
+    stage_override: Optional[int] = None,
+    quiet: bool = False,
+) -> Dict[str, Any]:
+    db.init_db()
+    if not force_new and stage_override is None:
+        existing = db.get_today_ja_mission()
+        if existing:
+            return existing
+
+    prog = db.get_ja_progression_state()
+    target_stage = stage_override if stage_override is not None else prog["stage"]
+    stage_bundle = ja_curriculum.pick_ja_topic(target_stage, prog["used_topics"])
+
+    if not quiet:
+        with console.status(
+            f"[bold magenta]🇯🇵 Crafting your Japanese mission ({stage_bundle['short_name']} — {stage_bundle['topic']['title']})...[/bold magenta]",
+            spinner="dots",
+        ):
+            mission_data = ai.generate_ja_mission(
+                stage_bundle,
+                unmastered_vocab=prog["unmastered_vocab"],
+                top_traps=prog["top_traps"],
+            )
+            mission_id = db.save_ja_mission(mission_data)
+    else:
+        mission_data = ai.generate_ja_mission(
+            stage_bundle,
+            unmastered_vocab=prog["unmastered_vocab"],
+            top_traps=prog["top_traps"],
+        )
+        mission_id = db.save_ja_mission(mission_data)
+
+    mission = db.get_ja_mission_by_id(mission_id)
+    assert mission is not None
+    return mission
+
+
+def render_ja_mission_card(mission: Dict[str, Any]) -> None:
+    console.print()
+    header = Text()
+    header.append("🇯🇵 NIHONGO SPEAKING MISSION ", style="bold white on red")
+    header.append(f"  {mission['date']}  ", style="bold cyan")
+    header.append(f"•  Stage {mission['stage']}/5: {mission['stage_name']}  ", style="bold yellow")
+    header.append(f"•  Target: {mission['target_seconds']}s", style="bold green")
+    console.print(header)
+
+    model_body = (
+        f"[bold white]{_fmt_furigana(mission['model_japanese'])}[/bold white]\n\n"
+        f"[dim]English: {mission['model_english']}[/dim]\n\n"
+        f"[bold magenta]🎧 Tip:[/bold magenta] Press [bold magenta]\\[l][/bold magenta] to hear native Japanese audio & shadow aloud before recording!"
+    )
+    console.print(
+        Panel(
+            model_body,
+            title=f"[bold cyan]📖 Model Reading: {mission['topic_title']}[/bold cyan]",
+            subtitle=f"[dim]{mission['scenario']}[/dim]",
+            box=ROUNDED,
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+    prompt_body = (
+        f"[bold yellow]Speaking Prompt (JA):[/bold yellow] [bold white]{_fmt_furigana(mission['speaking_prompt_ja'])}[/bold white]\n"
+        f"[bold green]Goal ({mission['target_seconds']}s):[/bold green] {mission['speaking_prompt_en']}"
+    )
+    if mission.get("starter_template"):
+        prompt_body += (
+            f"\n\n[bold cyan]🗣️ Sentence Starter Skeleton (fill in the blanks if you get stuck):[/bold cyan]\n"
+            f"  [white]{_fmt_furigana(mission['starter_template'])}[/white]"
+        )
+    console.print(
+        Panel(
+            prompt_body,
+            title="[bold green]🎙️ Your Speaking Task[/bold green]",
+            box=ROUNDED,
+            border_style="green",
+        )
+    )
+
+    gf = mission.get("grammar_frame", {})
+    if gf.get("pattern"):
+        gf_text = (
+            f"[bold magenta]{_fmt_furigana(gf['pattern'])}[/bold magenta]  —  [white]{gf.get('meaning', '')}[/white]\n"
+            f"[dim]How to form:[/dim] {_fmt_furigana(gf.get('structure', ''))}\n"
+            f"[cyan]Example:[/cyan] {_fmt_furigana(gf.get('example_ja', ''))}  [dim]({gf.get('example_en', '')})[/dim]"
+        )
+        console.print(
+            Panel(
+                gf_text,
+                title="[bold magenta]🧱 Core Grammar Frame (Use at least once)[/bold magenta]",
+                box=ROUNDED,
+                border_style="magenta",
+            )
+        )
+
+    vb_table = Table(
+        title="🎯 3 Vocab / Expression Building Blocks",
+        box=ROUNDED,
+        border_style="yellow",
+        show_lines=True,
+        expand=True,
+    )
+    vb_table.add_column("#", style="bold yellow", width=3)
+    vb_table.add_column("Word (Furigana)", style="bold white", ratio=2)
+    vb_table.add_column("Reading", style="cyan", ratio=1)
+    vb_table.add_column("Meaning", style="green", ratio=2)
+    vb_table.add_column("Example in Context", style="italic dim", ratio=3)
+
+    for idx, vb in enumerate(mission.get("vocab_blocks", []), start=1):
+        vb_table.add_row(
+            str(idx),
+            _fmt_furigana(vb.get("word", "")),
+            vb.get("reading", ""),
+            vb.get("meaning", ""),
+            _fmt_furigana(vb.get("example_ja", "")),
+        )
+    console.print(vb_table)
+
+    traps = mission.get("particle_traps", [])
+    if traps:
+        trap_table = Table(
+            title="⚠️ Particle & Conjugation Watchouts",
+            box=ROUNDED,
+            border_style="red",
+            expand=True,
+        )
+        trap_table.add_column("Watchout", style="bold yellow", ratio=2)
+        trap_table.add_column("Avoid (✗)", style="bold red", ratio=2)
+        trap_table.add_column("Say Instead (✓)", style="bold green", ratio=2)
+        trap_table.add_column("Why", style="white", ratio=3)
+        for tr in traps:
+            trap_table.add_row(
+                _fmt_furigana(tr.get("trap_title", "")),
+                _fmt_furigana(tr.get("wrong", "")),
+                _fmt_furigana(tr.get("right", "")),
+                tr.get("explanation", ""),
+            )
+        console.print(trap_table)
+
+
+def render_ja_review_card(
+    mission: Dict[str, Any],
+    metrics: Dict[str, Any],
+    transcript: str,
+    review: Dict[str, Any],
+    round_num: int,
+) -> None:
+    console.print()
+    score = review.get("score", 78)
+    score_color = "green" if score >= 80 else ("yellow" if score >= 65 else "red")
+
+    console.print(
+        Panel(
+            f"[white]{transcript}[/white]",
+            title=(
+                f"[bold cyan]📝 Round {round_num} Japanese Transcript[/bold cyan] "
+                f"[dim]({metrics['duration_sec']}s • {metrics['char_count']} chars • {metrics['cpm']} CPM)[/dim]"
+            ),
+            box=ROUNDED,
+            border_style="cyan",
+        )
+    )
+
+    vocab_used_str = ", ".join(_fmt_furigana(w) for w in metrics.get("vocab_used", [])) or "None auto-detected"
+    grammar_status = (
+        f"[bold green]✓ Hit ({_fmt_furigana(metrics.get('grammar_pattern', ''))})[/bold green]"
+        if metrics.get("grammar_used")
+        else f"[yellow]○ Missed ({_fmt_furigana(metrics.get('grammar_pattern', ''))})[/yellow]"
+    )
+
+    summary_text = (
+        f"[bold {score_color}]Overall Score: {score}/100[/bold {score_color}]\n\n"
+        f"[bold white]{review.get('summary_feedback', '')}[/bold white]\n\n"
+        f"[bold yellow]Scaffolding Check:[/bold yellow] {_fmt_furigana(review.get('scaffolding_check', ''))}\n"
+        f"  • [cyan]Grammar Frame:[/cyan] {grammar_status}\n"
+        f"  • [green]Vocab Blocks Used:[/green] {vocab_used_str}"
+    )
+
+    traps_spotted = review.get("traps_spotted", [])
+    if traps_spotted:
+        summary_text += "\n\n[bold magenta]🔍 Particle & Grammar Notes from Your Take:[/bold magenta]"
+        for t in traps_spotted:
+            summary_text += f"\n  • {_fmt_furigana(t)}"
+
+    console.print(
+        Panel(
+            summary_text,
+            title=f"[bold {score_color}]🎯 Japanese Coach Diagnosis (Round {round_num})[/bold {score_color}]",
+            box=ROUNDED,
+            border_style=score_color,
+        )
+    )
+
+    upgrades = review.get("sentence_upgrades", [])
+    if upgrades:
+        up_table = Table(
+            title="🚀 Sentence Upgrades (How a Native Speaker Phrases Your Thoughts)",
+            box=ROUNDED,
+            border_style="green",
+            show_lines=True,
+            expand=True,
+        )
+        up_table.add_column("What You Said", style="yellow", ratio=2)
+        up_table.add_column("Coach Note", style="dim", ratio=2)
+        up_table.add_column("Polite (です/ます) & Casual Upgrades", style="white", ratio=4)
+
+        for u in upgrades:
+            upgrades_col = (
+                f"[bold green]Polite:[/bold green] {_fmt_furigana(u.get('natural_polite', ''))}\n"
+                f"[bold cyan]Casual:[/bold cyan] {_fmt_furigana(u.get('natural_casual', ''))}"
+            )
+            up_table.add_row(
+                _fmt_furigana(u.get("original", "")),
+                u.get("why_upgrade", ""),
+                upgrades_col,
+            )
+        console.print(up_table)
+
+    if review.get("native_model_version"):
+        native_body = (
+            f"[bold white]{_fmt_furigana(review['native_model_version'])}[/bold white]\n\n"
+            f"[dim]English: {review.get('native_model_english', '')}[/dim]\n\n"
+            f"[bold magenta]🎧 Press \\[l] at the prompt below to hear this spoken aloud & shadow it![/bold magenta]"
+        )
+        console.print(
+            Panel(
+                native_body,
+                title="[bold magenta]🗣️ Polished Native Version of Your Thoughts (Read & Shadow Aloud!)[/bold magenta]",
+                box=ROUNDED,
+                border_style="magenta",
+                padding=(1, 2),
+            )
+        )
+
+    if review.get("round2_challenge"):
+        ch_text = _fmt_furigana(review["round2_challenge"]).replace("[l]", "\\[l]").replace("[r]", "\\[r]")
+        console.print(
+            Panel(
+                f"[bold yellow]{ch_text}[/bold yellow]",
+                title="[bold yellow]🔥 Next Step / Round 2 Challenge[/bold yellow]",
+                box=ROUNDED,
+                border_style="yellow",
+            )
+        )
+
+
+def save_ja_markdown_report(
+    mission: Dict[str, Any],
+    metrics: Dict[str, Any],
+    transcript: str,
+    review: Dict[str, Any],
+    round_num: int,
+) -> Path:
+    db.ensure_dirs()
+    md_path = db.JA_REVIEWS_DIR / f"{mission['date']}_ja_mission{mission['id']}.md"
+    mode = "a" if md_path.exists() else "w"
+
+    lines = []
+    if mode == "w":
+        gf = mission.get("grammar_frame", {})
+        lines.extend(
+            [
+                f"# 🇯🇵 Japanese Speaking Session — {mission['date']}",
+                "",
+                f"- **Stage:** Stage {mission['stage']}/5 ({mission['stage_name']})",
+                f"- **Topic:** {mission['topic_title']} — {mission['scenario']}",
+                f"- **Prompt (JA):** {mission['speaking_prompt_ja']}",
+                f"- **Prompt (EN):** {mission['speaking_prompt_en']}",
+                f"- **Core Grammar Frame:** `{gf.get('pattern', '')}` — {gf.get('meaning', '')}",
+                "",
+                "## 📖 Model Japanese",
+                f"> {mission['model_japanese']}",
+                f"> ({mission['model_english']})",
+                "",
+                "## 🎯 Vocab Building Blocks",
+            ]
+        )
+        for vb in mission.get("vocab_blocks", []):
+            lines.append(f"- **{vb.get('word')}** (`{vb.get('reading')}`) — {vb.get('meaning')} *(e.g. {vb.get('example_ja')})*")
+        lines.append("")
+
+    lines.extend(
+        [
+            f"## 🎙️ Round {round_num} Attempt (Score: {review.get('score', 78)}/100)",
+            f"- **Duration:** {metrics['duration_sec']}s | **Characters:** {metrics['char_count']} | **Pace:** {metrics['cpm']} CPM",
+            f"- **Grammar Frame Used:** {'Yes' if metrics.get('grammar_used') else 'No'}",
+            f"- **Vocab Blocks Used:** {', '.join(metrics.get('vocab_used', [])) or 'None'}",
+            "",
+            "### Your Transcript",
+            f"> {transcript}",
+            "",
+            "### Coach Feedback",
+            review.get("summary_feedback", ""),
+            "",
+            f"**Scaffolding Check:** {review.get('scaffolding_check', '')}",
+            "",
+            "### Particle & Grammar Notes",
+        ]
+    )
+    for t in review.get("traps_spotted", []):
+        lines.append(f"- {t}")
+
+    lines.extend(["", "### Sentence Upgrades"])
+    for idx, u in enumerate(review.get("sentence_upgrades", []), start=1):
+        lines.extend(
+            [
+                f"#### {idx}. \"{u.get('original', '')}\"",
+                f"- **Why:** {u.get('why_upgrade', '')}",
+                f"- **Polite (です/ます):** {u.get('natural_polite', '')}",
+                f"- **Casual:** {u.get('natural_casual', '')}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "### Polished Native Version (Shadow Aloud)",
+            f"> {review.get('native_model_version', '')}",
+            f"> ({review.get('native_model_english', '')})",
+            "",
+            "---",
+            "",
+        ]
+    )
+
+    with open(md_path, mode, encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return md_path
+
+
+def _execute_ja_round(
+    mission: Dict[str, Any],
+    round_num: int,
+    use_text: bool = False,
+    provided_text: Optional[str] = None,
+    prev_transcript: Optional[str] = None,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    audio_path: Optional[Path] = None
+    duration_sec = 0.0
+    target_secs = int(mission.get("target_seconds", 30))
+
+    if provided_text is not None:
+        transcript = provided_text.strip()
+        duration_sec = round(max(10.0, len(transcript) / 3.0), 1)
+    elif use_text:
+        console.print("\n[bold cyan]Type or paste your Japanese response below (hiragana/kanji) and press [Enter]:[/bold cyan]")
+        transcript = Prompt.ask("[bold green]日本語 response[/bold green]").strip()
+        duration_sec = round(max(10.0, len(transcript) / 3.0), 1)
+    else:
+        audio_path = db.RECORDINGS_DIR / f"{timestamp}_ja_m{mission['id']}_r{round_num}.wav"
+        duration_sec = audio.record_audio(audio_path, console, target_seconds=target_secs)
+        if duration_sec < 1.2:
+            console.print("[bold yellow]⚠️ Recording was too short (<1.2s). Let's try again or press [t] to type.[/bold yellow]")
+            return None
+        with console.status("[bold cyan]Transcribing your Japanese speech locally with Whisper...[/bold cyan]"):
+            transcript = audio.transcribe_audio(audio_path, lang="ja")
+
+    if not transcript or len(transcript.strip()) < 2:
+        console.print("[bold red]⚠️ Could not detect enough Japanese speech in that take. Check your mic or press [t] to type.[/bold red]")
+        return None
+
+    metrics = audio.analyze_ja_transcript(transcript, duration_sec, mission)
+
+    with console.status("[bold magenta]🇯🇵 Analyzing particles, grammar frame & crafting natural Japanese upgrades...[/bold magenta]"):
+        review = ai.review_ja_attempt(
+            mission,
+            metrics,
+            transcript,
+            round_num=round_num,
+            prev_transcript=prev_transcript,
+        )
+        db.save_ja_attempt(
+            mission["id"],
+            round_num=round_num,
+            audio_path=str(audio_path) if audio_path else None,
+            metrics=metrics,
+            transcript=transcript,
+            review=review,
+        )
+        md_path = save_ja_markdown_report(mission, metrics, transcript, review, round_num)
+
+    render_ja_review_card(mission, metrics, transcript, review, round_num)
+    console.print(f"[dim]📄 Saved Japanese review to {md_path}[/dim]")
+    return transcript, review
+
+
+def run_ja_interactive_session(force_new: bool = False, stage_override: Optional[int] = None) -> None:
+    mission = _prepare_ja_mission(force_new=force_new, stage_override=stage_override)
+    render_ja_mission_card(mission)
+
+    while True:
+        choice = Prompt.ask(
+            "\n[bold green]Ready?[/bold green] Press [bold white]\\[Enter][/bold white] to record mic, "
+            "[bold magenta]\\[l][/bold magenta] to listen & shadow native audio, "
+            "[bold cyan]\\[t][/bold cyan] to type Japanese, "
+            "[bold yellow]\\[n][/bold yellow] for a new mission, or "
+            "[bold red]\\[q][/bold red] to quit",
+            default="",
+            show_default=False,
+        ).strip().lower()
+
+        if choice == "q":
+            console.print("[dim]また明日！(See you tomorrow!)[/dim]")
+            return
+        if choice == "l":
+            audio.synthesize_and_play_ja_tts(
+                mission["model_japanese"],
+                console,
+                label=f"Model Reading ({mission['topic_title']})",
+            )
+            continue
+        if choice == "n":
+            mission = _prepare_ja_mission(force_new=True, stage_override=stage_override)
+            render_ja_mission_card(mission)
+            continue
+
+        use_text = choice == "t"
+        r1_out = _execute_ja_round(mission, round_num=1, use_text=use_text)
+        if not r1_out:
+            continue
+        r1_transcript, r1_review = r1_out
+
+        # Round 2 loop with [l] to listen to the AI's Polished Native Japanese Version!
+        while True:
+            r2_choice = Prompt.ask(
+                "\n[bold yellow]🔥 Shadow & Lock It In![/bold yellow] Press "
+                "[bold magenta]\\[l][/bold magenta] to listen to your Polished Native Version, "
+                "[bold green]\\[r][/bold green] to record Round 2 retry, "
+                "[bold cyan]\\[t][/bold cyan] to type Round 2, or "
+                "[bold white]\\[Enter][/bold white] to finish for today",
+                default="",
+                show_default=False,
+            ).strip().lower()
+
+            if r2_choice == "l":
+                native_text = r1_review.get("native_model_version") or mission["model_japanese"]
+                audio.synthesize_and_play_ja_tts(
+                    native_text,
+                    console,
+                    label="Your Polished Native Japanese Version",
+                )
+                continue
+
+            if r2_choice in ("r", "t"):
+                _execute_ja_round(
+                    mission,
+                    round_num=2,
+                    use_text=(r2_choice == "t"),
+                    prev_transcript=r1_transcript,
+                )
+                console.print("\n[bold green]✅ お疲れ様でした！ (Awesome work! Round 1 + Round 2 completed and logged.)[/bold green]")
+            else:
+                console.print("\n[bold green]✅ お疲れ様でした！ Daily Japanese speaking session saved.[/bold green]")
+            return
+
+
+@ja_app.callback()
+def ja_main(
+    ctx: typer.Context,
+    new: bool = typer.Option(False, "--new", "-n", help="Generate a brand new Japanese speaking mission right now."),
+    stage: Optional[int] = typer.Option(None, "--stage", "-s", min=1, max=5, help="Practice a specific curriculum stage (1=Early N5 .. 5=N4+)."),
+) -> None:
+    if ctx.invoked_subcommand is None:
+        run_ja_interactive_session(force_new=new, stage_override=stage)
+
+
+@ja_app.command("today")
+def ja_cmd_today(
+    new: bool = typer.Option(False, "--new", "-n", help="Generate a brand new Japanese speaking mission."),
+    stage: Optional[int] = typer.Option(None, "--stage", "-s", min=1, max=5, help="Override curriculum stage (1..5)."),
+) -> None:
+    """Start today's Japanese speaking mission, TTS shadowing, and AI coaching."""
+    run_ja_interactive_session(force_new=new, stage_override=stage)
+
+
+@ja_app.command("new")
+def ja_cmd_new(
+    stage: Optional[int] = typer.Option(None, "--stage", "-s", min=1, max=5, help="Override curriculum stage (1..5)."),
+) -> None:
+    """Force-generate a brand new Japanese speaking mission."""
+    run_ja_interactive_session(force_new=True, stage_override=stage)
+
+
+@ja_app.command("listen")
+def ja_cmd_listen(
+    slow: bool = typer.Option(False, "--slow", help="Play at slower -22% speed for careful shadowing."),
+) -> None:
+    """Synthesize and play today's Japanese model passage aloud via native neural TTS."""
+    mission = _prepare_ja_mission(force_new=False)
+    render_ja_mission_card(mission)
+    rate = "-22%" if slow else "-10%"
+    audio.synthesize_and_play_ja_tts(
+        mission["model_japanese"],
+        console,
+        label=f"Model Reading ({mission['topic_title']})",
+        rate=rate,
+    )
+
+
+@ja_app.command("prep")
+def ja_cmd_prep(
+    force: bool = typer.Option(False, "--force", "-f", help="Prepare a new Japanese mission even if today's already exists."),
+    stage: Optional[int] = typer.Option(None, "--stage", "-s", min=1, max=5, help="Override curriculum stage (1..5)."),
+) -> None:
+    """Pre-generate and cache today's Japanese mission in the background."""
+    mission = _prepare_ja_mission(force_new=force, stage_override=stage, quiet=True)
+    console.print(
+        f"[green]✓ Prepared Japanese mission #{mission['id']} for {mission['date']}:[/green] "
+        f"[Stage {mission['stage']}] {mission['topic_title']}"
+    )
+
+
+@ja_app.command("review-text")
+def ja_cmd_review_text(
+    text: str = typer.Argument(..., help="Japanese response text to review against today's Japanese mission."),
+    round_num: int = typer.Option(1, "--round", "-r", help="Round number (1 or 2)."),
+) -> None:
+    """Review a typed or dictated Japanese response directly against today's mission."""
+    mission = _prepare_ja_mission(force_new=False)
+    render_ja_mission_card(mission)
+    _execute_ja_round(mission, round_num=round_num, provided_text=text)
+
+
+@ja_app.command("stats")
+def ja_cmd_stats() -> None:
+    """Show your Japanese curriculum stage, streak, CPM pace, mastered grammar & vocab, and particle watchouts."""
+    s = db.get_ja_stats_summary()
+    stage_info = ja_curriculum.get_stage_info(s["stage"])
+    next_stage_in = max(0, (s["stage"] * 5) - s["completed_missions"]) if s["stage"] < 5 else 0
+    prog_note = (
+        f"{next_stage_in} more completed daily mission(s) to unlock Stage {s['stage'] + 1}"
+        if s["stage"] < 5
+        else "Max Curriculum Stage Reached (Stage 5 N4+)"
+    )
+
+    console.print()
+    summary = (
+        f"🗾 [bold yellow]Current Level:[/bold yellow] {stage_info['name']}   [dim]({prog_note})[/dim]\n"
+        f"🔥 [bold yellow]Current Streak:[/bold yellow] {s['streak']} day(s)   •   "
+        f"📅 [bold cyan]Practice Days:[/bold cyan] {s['practice_days']}   •   "
+        f"🎙️ [bold green]Total Takes:[/bold green] {s['total_attempts']} ({s['total_minutes']} mins)\n"
+        f"⚡ [bold white]Avg Speaking Pace:[/bold white] {s['avg_cpm']} CPM (chars/min)   •   "
+        f"🧱 [bold magenta]Grammar Frames Used:[/bold magenta] {s['grammar_mastered']}/{s['grammar_assigned']}   •   "
+        f"🎯 [bold green]Vocab Blocks Used:[/bold green] {s['vocab_mastered']}/{s['vocab_assigned']}"
+    )
+    console.print(Panel(summary, title="[bold cyan]🇯🇵 Your Japanese Speaking Progress[/bold cyan]", box=ROUNDED))
+
+    traps = s.get("top_traps", [])
+    if traps:
+        tt = Table(title="⚠️ Personal Particle & Grammar Watchouts Spotted by Coach", box=ROUNDED)
+        tt.add_column("Observation / Trap", style="bold yellow")
+        tt.add_column("Times Spotted", justify="right")
+        tt.add_column("Last Seen", style="dim")
+        for t in traps:
+            tt.add_row(_fmt_furigana(t["trap"]), str(t["hit_count"]), t["last_seen"][:10])
+        console.print(tt)
+
+    recent = s.get("recent_attempts", [])
+    if recent:
+        rt = Table(title="🕒 Recent Japanese Speaking Sessions", box=ROUNDED, expand=True)
+        rt.add_column("Date", style="cyan")
+        rt.add_column("Round", justify="center")
+        rt.add_column("Stage", style="yellow")
+        rt.add_column("Topic", ratio=3)
+        rt.add_column("CPM", justify="right")
+        rt.add_column("Score", justify="right", style="bold green")
+        for r in recent:
+            rev = json.loads(r.get("review_json") or "{}")
+            rt.add_row(
+                r["date"],
+                f"R{r['round_num']}",
+                f"Stage {r['stage']}",
+                r["topic_title"][:48],
+                str(r["cpm"]),
+                f"{rev.get('score', '—')}/100",
+            )
+        console.print(rt)
+
+
+@ja_app.command("history")
+def ja_cmd_history() -> None:
+    """List saved Japanese Markdown reviews and audio recordings."""
+    db.ensure_dirs()
+    reviews = sorted(db.JA_REVIEWS_DIR.glob("*.md"), reverse=True)
+    console.print(f"\n[bold cyan]📁 Japanese Markdown Reviews Directory:[/bold cyan] {db.JA_REVIEWS_DIR}")
+    console.print(f"[bold cyan]🎙️ Audio Recordings Directory:[/bold cyan] {db.RECORDINGS_DIR}\n")
+    if not reviews:
+        console.print("[dim]No saved Japanese reviews yet. Run `speak ja` (or `speak-ja`) to complete your first session![/dim]")
         return
     for p in reviews[:15]:
         console.print(f"  • [bold white]{p.name}[/bold white]  →  [dim]{p}[/dim]")
