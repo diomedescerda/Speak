@@ -445,6 +445,43 @@ def cmd_sync() -> None:
     _auto_sync_if_diomedes(reason="manual-sync", pull_first=True)
 
 
+@app.command("user")
+def cmd_user(
+    action_or_name: Optional[str] = typer.Argument(None, help="Use 'status', 'set', or a profile name."),
+    target_name: Optional[str] = typer.Argument(None, help="Profile to select with 'set'."),
+) -> None:
+    """View or configure the active user profile."""
+    action = (action_or_name or "status").strip().lower()
+    if target_name is not None and action != "set":
+        raise typer.BadParameter("Use `speak user set <profile>` to select a profile.")
+
+    if action == "status":
+        profile = "diomedes" if db.IS_DIOMEDES else "local"
+        console.print(f"Active profile: {profile}")
+        console.print(f"Database: {db.DB_PATH}")
+        console.print(f"Reviews: {db.REVIEWS_DIR}")
+        console.print(f"Auto-sync: {'enabled' if db.IS_DIOMEDES else 'disabled'}")
+        console.print(f"Device config: {db.CONFIG_FILE}")
+        return
+
+    name = (target_name or "").strip().lower() if action == "set" else action
+    if name in ("diomedes", "diomedescerda"):
+        profile = "diomedes"
+    elif name in ("local", "default", "other"):
+        profile = "local"
+    else:
+        raise typer.BadParameter("Choose 'diomedes' or 'local', for example `speak user set diomedes`.")
+
+    cfg = db.load_config()
+    cfg.update(user=profile, auto_sync=profile == "diomedes")
+    try:
+        db.save_config(cfg)
+    except OSError as exc:
+        console.print(f"[red]Could not save the user profile.[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Saved profile {profile}. Auto-sync {'enabled' if cfg['auto_sync'] else 'disabled'}.")
+
+
 @app.command("stats")
 def cmd_stats() -> None:
     """Show your speaking streak, WPM, vocabulary variety, mastered phrases, and top crutch words."""

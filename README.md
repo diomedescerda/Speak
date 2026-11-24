@@ -30,6 +30,8 @@ speak
 | `speak history` | List saved Markdown coaching reports (`~/.local/share/speak/reviews/`) and audio files. |
 | `speak prep` | Pre-fetch today's mission in the background (runs automatically every day via `systemd --user` timer `speak-prep.timer`). |
 | `speak review-text "..."` | Directly review a text/dictated paragraph against today's mission. |
+| `speak user set diomedes` | Select the Diomedes profile and enable Git sync after practice. |
+| `speak user` | Show the active profile and its storage and sync settings. |
 
 ## 🇯🇵 Japanese Speaking Coach (`speak ja` / `speak-ja`)
 
@@ -66,7 +68,8 @@ speak ja        # or simply: speak-ja
   - **Database:** `~/.local/share/speak/speak.db`
   - **Markdown Reviews:** `~/.local/share/speak/reviews/` (English) and `~/.local/share/speak/reviews/ja/` (Japanese)
 - **Owner Repo Persistence (`Diomedes`):**
-  - When Git user `diomedescerda` is detected (or `SPEAK_USER=diomedes`), `speak.db` and `reviews/` are persisted inside `<repo>/data/diomedes/` and automatically committed & pushed after completed sessions. Other users automatically use `~/.local/share/speak/` and ignore `data/diomedes/`.
+  - Run `speak user set diomedes` once per install. Speak saves the profile in local `data/config.json`, stores `speak.db` and `reviews/` under `<repo>/data/diomedes/`, and commits and pushes completed sessions and reviews. The Git author name remains the fallback when no profile is selected. `SPEAK_USER` can override the selected profile.
+  - Run `speak user set local` to use `~/.local/share/speak/` for your progress.
 - **Audio Recordings & TTS Cache (Always Local):** `~/.local/share/speak/recordings/` & `~/.local/share/speak/tts_cache/`
 - **Daily Timer:** `~/.config/systemd/user/speak-prep.timer` (`systemctl --user status speak-prep.timer`)
 

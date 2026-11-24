@@ -10,6 +10,20 @@ from typing import Any, Dict, List, Optional
 REPO_ROOT = Path(__file__).resolve().parent
 LOCAL_DATA_DIR = Path(os.environ.get("SPEAK_LOCAL_DATA_DIR") or Path.home() / ".local" / "share" / "speak").expanduser()
 DIOMEDES_DATA_DIR = REPO_ROOT / "data" / "diomedes"
+CONFIG_FILE = REPO_ROOT / "data" / "config.json"
+
+
+def load_config() -> Dict[str, Any]:
+    try:
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def save_config(cfg: Dict[str, Any]) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def is_diomedes_user() -> bool:
@@ -18,6 +32,12 @@ def is_diomedes_user() -> bool:
     if env_user in ("diomedes", "diomedescerda", "1", "true"):
         return True
     if env_user in ("local", "default", "other", "0", "false"):
+        return False
+
+    cfg_user = str(load_config().get("user", "")).strip().lower()
+    if cfg_user in ("diomedes", "diomedescerda"):
+        return True
+    if cfg_user in ("local", "default", "other"):
         return False
 
     try:

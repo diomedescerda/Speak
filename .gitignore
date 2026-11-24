@@ -7,4 +7,5 @@ venv/
 *.wav
 *.db
 !data/diomedes/speak.db
+data/config.json
 
