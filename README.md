@@ -69,3 +69,34 @@ speak ja        # or simply: speak-ja
   - When Git user `diomedescerda` is detected (or `SPEAK_USER=diomedes`), `speak.db` and `reviews/` are persisted inside `<repo>/data/diomedes/` and automatically committed & pushed after completed sessions. Other users automatically use `~/.local/share/speak/` and ignore `data/diomedes/`.
 - **Audio Recordings & TTS Cache (Always Local):** `~/.local/share/speak/recordings/` & `~/.local/share/speak/tts_cache/`
 - **Daily Timer:** `~/.config/systemd/user/speak-prep.timer` (`systemctl --user status speak-prep.timer`)
+
+## Practice from an iPhone
+
+The mobile web app offers today's English and Japanese missions, microphone recording or keyboard dictation, coaching feedback, a second round, and saved practice history. Japanese model passages and polished responses can be played on the phone.
+
+### Run the web service
+
+On the Linux host, install FFmpeg and set up OpenCode as for the CLI. Create a Python 3.12 environment with CPU PyTorch and the web dependencies.
+
+```bash
+uv venv --python 3.12
+uv pip install --index https://download.pytorch.org/whl/cpu torch
+uv pip install -r requirements-web.txt
+.venv/bin/python -m speak_web --port 8765
+```
+
+The app listens at `http://127.0.0.1:8765`. It uses the CLI's default database and audio directories. When the CLI runs from a separate checkout, set `SPEAK_DATA_DIR` to its active data directory, the one with `speak.db`. Web submissions save to the shared database and write their own Markdown reports. A user-level systemd service can keep the web process running under the same Linux account as the CLI. Leave the host awake for phone access.
+
+### Open it privately
+
+1. Join the Linux host and iPhone to the same [Tailscale network](https://tailscale.com/docs/install/ios). Enable HTTPS certificates in Tailscale if prompted.
+2. Configure the web service with `SPEAK_TAILSCALE_HOST` set to the host's full `.ts.net` name and `SPEAK_ALLOWED_LOGIN` set to your Tailscale login. Restart the service with those settings. The proxy supplies the signed-in user's identity.
+3. Run `sudo tailscale serve --bg 8765` on a system-managed Tailscale installation. Open the HTTPS URL it prints in Safari. From Safari's share menu, choose **Add to Home Screen** and allow microphone access when recording. [Tailscale Serve setup](https://tailscale.com/docs/features/tailscale-serve)
+
+### Verify the mobile flow
+
+```bash
+uv pip install -r tests/requirements.txt
+.venv/bin/python -m playwright install chromium
+.venv/bin/python -m unittest discover -s tests -v
+```

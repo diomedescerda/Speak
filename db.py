@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
-LOCAL_DATA_DIR = Path.home() / ".local" / "share" / "speak"
+LOCAL_DATA_DIR = Path(os.environ.get("SPEAK_LOCAL_DATA_DIR") or Path.home() / ".local" / "share" / "speak").expanduser()
 DIOMEDES_DATA_DIR = REPO_ROOT / "data" / "diomedes"
 
 
@@ -36,8 +36,11 @@ def is_diomedes_user() -> bool:
     return False
 
 
-IS_DIOMEDES = is_diomedes_user()
-DATA_DIR = DIOMEDES_DATA_DIR if IS_DIOMEDES else LOCAL_DATA_DIR
+DATA_OVERRIDE = os.environ.get("SPEAK_DATA_DIR")
+IS_DIOMEDES = not DATA_OVERRIDE and is_diomedes_user()
+DATA_DIR = Path(DATA_OVERRIDE).expanduser() if DATA_OVERRIDE else (
+    DIOMEDES_DATA_DIR if IS_DIOMEDES else LOCAL_DATA_DIR
+)
 RECORDINGS_DIR = LOCAL_DATA_DIR / "recordings"
 REVIEWS_DIR = DATA_DIR / "reviews"
 JA_REVIEWS_DIR = REVIEWS_DIR / "ja"
@@ -217,6 +220,13 @@ def init_db() -> None:
                 word TEXT PRIMARY KEY,
                 hit_count INTEGER NOT NULL DEFAULT 1,
                 last_seen TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS web_submissions (
+                language TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                attempt_id INTEGER NOT NULL,
+                PRIMARY KEY (language, request_id)
             );
 
             CREATE TABLE IF NOT EXISTS phrase_bank (
@@ -418,6 +428,8 @@ def save_attempt(
     metrics: Dict[str, Any],
     transcript: str,
     review: Dict[str, Any],
+    *,
+    request_id: Optional[str] = None,
 ) -> int:
     init_db()
     now_str = datetime.now().isoformat(timespec="seconds")
@@ -451,6 +463,8 @@ def save_attempt(
             ),
         )
         attempt_id = cur.lastrowid
+        if request_id:
+            conn.execute("INSERT INTO web_submissions VALUES ('en', ?, ?)", (request_id, attempt_id))
 
         # Update mastered phrases
         for phrase in targets_used:
@@ -702,6 +716,8 @@ def save_ja_attempt(
     metrics: Dict[str, Any],
     transcript: str,
     review: Dict[str, Any],
+    *,
+    request_id: Optional[str] = None,
 ) -> int:
     init_db()
     now_str = datetime.now().isoformat(timespec="seconds")
@@ -732,6 +748,8 @@ def save_ja_attempt(
             ),
         )
         attempt_id = cur.lastrowid
+        if request_id:
+            conn.execute("INSERT INTO web_submissions VALUES ('ja', ?, ?)", (request_id, attempt_id))
 
         for word in vocab_used:
             conn.execute(

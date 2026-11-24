@@ -208,9 +208,11 @@ def save_markdown_report(
     transcript: str,
     review: Dict[str, Any],
     round_num: int,
+    *,
+    report_path: Optional[Path] = None,
 ) -> Path:
     db.ensure_dirs()
-    md_path = db.REVIEWS_DIR / f"{mission['date']}.md"
+    md_path = report_path or db.REVIEWS_DIR / f"{mission['date']}.md"
     mode = "a" if md_path.exists() and round_num > 1 else "w"
 
     lines = []
@@ -773,9 +775,11 @@ def save_ja_markdown_report(
     transcript: str,
     review: Dict[str, Any],
     round_num: int,
+    *,
+    report_path: Optional[Path] = None,
 ) -> Path:
     db.ensure_dirs()
-    md_path = db.JA_REVIEWS_DIR / f"{mission['date']}_ja_mission{mission['id']}.md"
+    md_path = report_path or db.JA_REVIEWS_DIR / f"{mission['date']}_ja_mission{mission['id']}.md"
     mode = "a" if md_path.exists() else "w"
 
     lines = []

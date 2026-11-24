@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3ea">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Speak</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/assets/icon-192.png">
+  <link rel="apple-touch-icon" href="/assets/icon-192.png">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <h1>Speak</h1>
+      </div>
+      <nav class="navigation" aria-label="Main">
+        <button type="button" id="show-practice" aria-current="page">Practice</button>
+        <button type="button" id="show-history">History</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-heading">
+      <h2 id="view-heading">Today’s mission</h2>
+      <div class="languages" role="group" aria-label="Practice language">
+        <button type="button" id="english" aria-pressed="true">English</button>
+        <button type="button" id="japanese" aria-pressed="false">Japanese</button>
+      </div>
+    </div>
+
+    <div id="practice-view">
+      <div class="card empty-state" id="mission-state">
+        <p id="mission-status" role="status">Loading your mission…</p>
+        <button type="button" class="secondary" id="reload-mission" hidden>Try again</button>
+      </div>
+
+      <div class="session-layout" id="session-layout" hidden>
+        <article class="card mission" id="mission"></article>
+        <section class="card practice" id="practice" aria-labelledby="round-heading">
+          <div class="practice-heading">
+            <h3 tabindex="-1" id="round-heading">Round 1</h3>
+            <span class="time" id="target-time"></span>
+          </div>
+          <p class="muted" id="round-focus" hidden></p>
+          <div id="completed" hidden>
+            <p>Feedback saved to your history.</p>
+            <button type="button" class="secondary" id="start-over">Start another take</button>
+          </div>
+
+          <form id="response-form">
+            <div id="record-panel">
+              <button type="button" class="primary full" id="record">
+                <span class="record-icon" aria-hidden="true"></span> Record
+              </button>
+              <button type="button" class="danger full" id="stop" hidden>
+                <span class="stop-icon" aria-hidden="true"></span> Stop
+              </button>
+              <button type="button" class="secondary full" id="cancel" hidden>Cancel</button>
+              <audio id="take" controls preload="metadata" aria-label="Preview your recording" hidden></audio>
+            </div>
+
+            <div id="text-panel" hidden>
+              <label for="response">Your response</label>
+              <textarea id="response" rows="5" maxlength="10000" dir="auto" placeholder="Type or use keyboard dictation…"></textarea>
+            </div>
+
+            <button type="submit" class="primary full" id="submit" hidden>Get feedback</button>
+            <button type="button" class="text-button" id="type-response">Type response</button>
+            <button type="button" class="text-button" id="use-microphone" hidden>Use microphone</button>
+          </form>
+          <p id="practice-status" class="practice-status" role="status"></p>
+        </section>
+        <article class="card materials" id="materials" hidden></article>
+      </div>
+      <article class="card feedback" id="feedback" hidden></article>
+    </div>
+
+    <div id="history-view" hidden>
+      <div class="card empty-state" id="history-state" hidden>
+        <p id="history-status" role="status"></p>
+        <button type="button" class="secondary" id="reload-history" hidden>Try again</button>
+      </div>
+      <ul class="history-list" id="history-list"></ul>
+      <article class="card feedback" id="history-feedback" hidden></article>
+    </div>
+  </main>
+</body>
+</html>

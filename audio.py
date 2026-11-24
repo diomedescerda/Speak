@@ -312,6 +312,23 @@ async def _synthesize_edge_tts(text: str, out_mp3: Path, voice: str = "ja-JP-Nan
     await communicate.save(str(out_mp3))
 
 
+def get_ja_tts_path(text: str, voice: str = "ja-JP-NanamiNeural", rate: str = "-10%") -> Path:
+    """Return a cached MP3, synthesizing the passage when needed."""
+    clean_text = strip_furigana(text).strip()
+    if not clean_text:
+        raise ValueError("No Japanese text available to play.")
+
+    ensure_dirs()
+    digest = hashlib.sha256(f"{voice}|{rate}|{clean_text}".encode("utf-8")).hexdigest()[:16]
+    cached_mp3 = TTS_CACHE_DIR / f"ja_{digest}.mp3"
+    if not cached_mp3.is_file() or cached_mp3.stat().st_size < 100:
+        with tempfile.TemporaryDirectory(dir=TTS_CACHE_DIR) as directory:
+            temporary_mp3 = Path(directory) / "speech.mp3"
+            asyncio.run(asyncio.wait_for(_synthesize_edge_tts(clean_text, temporary_mp3, voice, rate), 30))
+            temporary_mp3.replace(cached_mp3)
+    return cached_mp3
+
+
 def synthesize_and_play_ja_tts(
     text: str,
     console: Console,
@@ -320,22 +337,15 @@ def synthesize_and_play_ja_tts(
     rate: str = "-10%",
 ) -> None:
     """Synthesize clean Japanese text (stripping inline furigana) and play it aloud."""
-    clean_text = strip_furigana(text).strip()
-    if not clean_text:
-        console.print("[yellow]No Japanese text available to play.[/yellow]")
+    try:
+        with console.status(f"[bold cyan]🔊 Loading {label} ({voice}, {rate})...[/bold cyan]", spinner="dots"):
+            cached_mp3 = get_ja_tts_path(text, voice=voice, rate=rate)
+    except ValueError as e:
+        console.print(f"[yellow]{e}[/yellow]")
         return
-
-    ensure_dirs()
-    digest = hashlib.sha256(f"{voice}|{rate}|{clean_text}".encode("utf-8")).hexdigest()[:16]
-    cached_mp3 = TTS_CACHE_DIR / f"ja_{digest}.mp3"
-
-    if not cached_mp3.exists() or cached_mp3.stat().st_size < 100:
-        try:
-            with console.status(f"[bold cyan]🔊 Synthesizing {label} ({voice}, {rate})...[/bold cyan]", spinner="dots"):
-                asyncio.run(_synthesize_edge_tts(clean_text, cached_mp3, voice=voice, rate=rate))
-        except Exception as e:
-            console.print(f"[bold red]TTS synthesis error:[/bold red] {e}")
-            return
+    except Exception as e:
+        console.print(f"[bold red]TTS synthesis error:[/bold red] {e}")
+        return
 
     play_cmd: Optional[List[str]] = None
     if shutil.which("ffplay"):
