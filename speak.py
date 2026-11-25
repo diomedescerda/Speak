@@ -57,6 +57,10 @@ def _prepare_mission(force_new: bool = False, category: Optional[str] = None, qu
         existing = db.get_today_mission()
         if existing:
             return existing
+        if db.IS_DIOMEDES and db.pull_diomedes_data():
+            existing = db.get_today_mission()
+            if existing:
+                return existing
 
     used_urls = db.get_used_urls()
     speaking_mode = db.get_next_speaking_mode()
@@ -567,6 +571,10 @@ def _prepare_ja_mission(
         existing = db.get_today_ja_mission()
         if existing:
             return existing
+        if db.IS_DIOMEDES and db.pull_diomedes_data():
+            existing = db.get_today_ja_mission()
+            if existing:
+                return existing
 
     prog = db.get_ja_progression_state()
     target_stage = stage_override if stage_override is not None else prog["stage"]

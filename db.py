@@ -49,7 +49,7 @@ def is_diomedes_user() -> bool:
         )
         if proc.returncode == 0:
             git_name = proc.stdout.strip().lower()
-            if git_name in ("diomedescerda", "diomedes"):
+            if "diomedes" in git_name:
                 return True
     except Exception:
         pass
@@ -117,6 +117,25 @@ def ensure_dirs() -> None:
                         shutil.copy2(md_file, dest)
 
 
+def _pull_remote_progress() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "pull", "--ff-only", "--no-autostash"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+
+def pull_diomedes_data() -> bool:
+    """Pull latest remote progress for Diomedes before creating new daily missions."""
+    if not IS_DIOMEDES:
+        return False
+    try:
+        return _pull_remote_progress().returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def sync_diomedes_data(reason: str = "session", pull_first: bool = False) -> Dict[str, Any]:
     """Commit and push data/diomedes/ to the Git repository if running as Diomedes."""
     if not IS_DIOMEDES:
@@ -127,12 +146,14 @@ def sync_diomedes_data(reason: str = "session", pull_first: bool = False) -> Dic
 
     try:
         if pull_first:
-            subprocess.run(
-                ["git", "-C", str(REPO_ROOT), "pull", "--rebase", "--autostash"],
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
+            pull_proc = _pull_remote_progress()
+            if pull_proc.returncode != 0:
+                detail = pull_proc.stderr.strip() or pull_proc.stdout.strip()
+                return {
+                    "synced": False,
+                    "changed": False,
+                    "message": f"Could not pull remote progress. Local data was kept. {detail}",
+                }
 
         subprocess.run(
             ["git", "-C", str(REPO_ROOT), "add", rel_data_path],
