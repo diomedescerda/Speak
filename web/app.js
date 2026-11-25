@@ -179,7 +179,7 @@ function renderPractice() {
   if (ui.response.value !== session.draft) ui.response.value = session.draft;
   ui.submit.hidden = Boolean(capture) || (!typing && !session.take);
   ui.submit.disabled = session.busy || (typing && !session.draft.trim());
-  ui.submit.textContent = session.busy ? "Getting feedback…" : "Get feedback";
+  ui.submit.textContent = session.busy ? "Saving practice…" : "Save and get feedback";
   ui.typeResponse.hidden = typing || Boolean(capture);
   ui.typeResponse.disabled = session.busy;
   ui.microphone.hidden = !typing;
@@ -237,10 +237,11 @@ function releaseCapture(capture) {
   setNavigation();
 }
 
-function stopCapture(capture) {
-  if (capture.stopping) return;
+function stopCapture(capture, save = false) {
+  if (!capture || capture.stopping) return;
   capture.stopping = true;
   if (capture.recorder?.state === "recording") {
+    capture.saveOnStop = save;
     capture.recorder.stop();
     updateStatus(capture.session, "Preparing your recording…");
     return;
@@ -291,8 +292,12 @@ async function startCapture() {
       session.take = take;
       session.takeUrl = URL.createObjectURL(take);
       session.requestId = "";
-      updateStatus(session, "Recording ready.");
-      ui.submit.focus({preventScroll: true});
+      if (capture.saveOnStop) {
+        void submitResponse(session);
+      } else {
+        updateStatus(session, "Recording ready. Save it to add this practice to your history.");
+        ui.submit.focus({preventScroll: true});
+      }
     });
     recorder.addEventListener("error", () => {
       if (activeCapture !== capture) return;
@@ -330,9 +335,7 @@ function newRequestId() {
     || Array.from(window.crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-async function submitResponse(event) {
-  event.preventDefault();
-  const session = current();
+async function submitResponse(session) {
   if (session.busy || activeCapture || !session.mission) return;
   const typed = session.mode === "text";
   if (typed ? !session.draft.trim() : !session.take) return;
@@ -363,7 +366,10 @@ async function submitResponse(event) {
     updateStatus(session, error.message, "error");
   } finally {
     session.busy = false;
-    if (practicing(session)) renderPractice();
+    if (practicing(session)) {
+      renderPractice();
+      if (session.statusTone === "error") ui.submit.focus({preventScroll: true});
+    }
   }
 }
 
@@ -455,7 +461,7 @@ ui.language.ja.addEventListener("click", () => navigate(view, "ja"));
 ui.reloadMission.addEventListener("click", () => loadMission(current()));
 ui.reloadHistory.addEventListener("click", loadHistory);
 ui.record.addEventListener("click", startCapture);
-ui.stop.addEventListener("click", () => stopCapture(activeCapture));
+ui.stop.addEventListener("click", () => stopCapture(activeCapture, true));
 ui.cancel.addEventListener("click", () => stopCapture(activeCapture));
 ui.typeResponse.addEventListener("click", () => switchMode("text"));
 ui.microphone.addEventListener("click", () => switchMode("record"));
@@ -465,7 +471,10 @@ ui.response.addEventListener("input", () => {
   session.requestId = "";
   updateStatus(session);
 });
-ui.form.addEventListener("submit", submitResponse);
+ui.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitResponse(current());
+});
 ui.startOver.addEventListener("click", () => {
   const session = current();
   session.review = null;

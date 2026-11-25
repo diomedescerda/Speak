@@ -86,7 +86,7 @@ class MobileSpeakTest(unittest.TestCase):
         if not field.is_visible():
             self.button("Type response").click()
         field.fill(response)
-        self.button("Get feedback").click()
+        self.button("Save and get feedback").click()
 
     def expect_audio(self, button, kind):
         with self.page.expect_response(
@@ -133,10 +133,31 @@ class MobileSpeakTest(unittest.TestCase):
 
     def test_microphone_recording_upload_and_transcript(self):
         self.button("Record").click()
-        expect(self.button("Stop")).to_be_enabled()
+        stop = self.button("Stop and save")
+        expect(stop).to_be_enabled()
         # The service rejects recordings under its minimum speaking time.
         self.page.wait_for_timeout(2_000)
-        self.button("Stop").click()
-        self.button("Get feedback").click()
+        stop.click()
         expect(self.page.get_by_text("The microphone recording reached the coach.", exact=True)).to_be_visible()
+        expect(self.page.get_by_text("Practice saved to your history.")).to_be_visible()
         self.expect_audio("Play your recording", "recording")
+
+        self.page.reload()
+        self.button("History").click()
+        self.page.get_by_role("button", name="Round 1", exact=False).click()
+        expect(self.page.get_by_text("The microphone recording reached the coach.", exact=True)).to_be_visible()
+
+    def test_recording_is_retained_when_save_fails(self):
+        self.page.route("**/api/review?*", lambda route: route.fulfill(
+            status=503, json={"error": "Transcription is temporarily unavailable."},
+        ), times=1)
+        self.button("Record").click()
+        self.page.wait_for_timeout(2_000)
+        self.button("Stop and save").click()
+
+        expect(self.page.get_by_role("status").filter(
+            has_text="Transcription is temporarily unavailable."),
+        ).to_be_visible()
+        expect(self.page.get_by_label("Preview your recording")).to_be_visible()
+        self.button("Save and get feedback").click()
+        expect(self.page.get_by_text("Practice saved to your history.")).to_be_visible()

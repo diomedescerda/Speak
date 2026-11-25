@@ -50,7 +50,7 @@
           </div>
           <p class="muted" id="round-focus" hidden></p>
           <div id="completed" hidden>
-            <p>Feedback saved to your history.</p>
+            <p>Practice saved to your history.</p>
             <button type="button" class="secondary" id="start-over">Start another take</button>
           </div>
 
@@ -60,7 +60,7 @@
                 <span class="record-icon" aria-hidden="true"></span> Record
               </button>
               <button type="button" class="danger full" id="stop" hidden>
-                <span class="stop-icon" aria-hidden="true"></span> Stop
+                <span class="stop-icon" aria-hidden="true"></span> Stop and save
               </button>
               <button type="button" class="secondary full" id="cancel" hidden>Cancel</button>
               <audio id="take" controls preload="metadata" aria-label="Preview your recording" hidden></audio>
@@ -71,7 +71,7 @@
               <textarea id="response" rows="5" maxlength="10000" dir="auto" placeholder="Type or use keyboard dictation…"></textarea>
             </div>
 
-            <button type="submit" class="primary full" id="submit" hidden>Get feedback</button>
+            <button type="submit" class="primary full" id="submit" hidden>Save and get feedback</button>
             <button type="button" class="text-button" id="type-response">Type response</button>
             <button type="button" class="text-button" id="use-microphone" hidden>Use microphone</button>
           </form>

@@ -77,6 +77,8 @@ speak ja        # or simply: speak-ja
 
 The mobile web app offers today's English and Japanese missions, microphone recording or keyboard dictation, coaching feedback, a second round, and saved practice history. Japanese model passages and polished responses can be played on the phone.
 
+Tap **Stop and save** to submit a microphone recording. If the timer stops the recording, or saving fails, the preview shows **Save and get feedback** so you can submit the same take. Wait for **Practice saved to your history** before leaving the page. Pillars credits saved attempts, not recordings still in preview.
+
 ### Run the web service
 
 On the Linux host, install FFmpeg and set up OpenCode as for the CLI. Create a Python 3.12 environment with CPU PyTorch and the web dependencies.
